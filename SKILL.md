@@ -64,11 +64,11 @@ jobs:
 
 ## 注意点
 
-### submodule URL は HTTPS にすること
+### submodule は public リポジトリにすること
 
-`.gitmodules` の URL が `git@github.com:` (SSH) の場合、CI で認証失敗する。
-private repo を使う場合は deploy key の設定が必要。public repo なら SSH でも
-`submodules: recursive` で自動的に HTTPS にフォールバックされるが、HTTPS にしておくのが確実。
+`submodules: recursive` で CI 上にチェックアウトするため、
+依存する submodule リポジトリはすべて public に設定すること。
+private のまま使う場合は deploy key の設定が必要。
 
 ### submodules: recursive が必須
 
