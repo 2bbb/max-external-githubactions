@@ -61,3 +61,64 @@ jobs:
 - Windows: `externals/*.mxe64` (x64)
 
 各プラットフォームの artifact として GitHub Actions からダウンロード可能。
+
+## 注意点
+
+### submodule URL は HTTPS にすること
+
+`.gitmodules` の URL が `git@github.com:` (SSH) の場合、CI で認証失敗する。
+private repo を使う場合は deploy key の設定が必要。public repo なら SSH でも
+`submodules: recursive` で自動的に HTTPS にフォールバックされるが、HTTPS にしておくのが確実。
+
+### submodules: recursive が必須
+
+min-api の中に max-sdk-base がネストした submodule として含まれている。
+`--init` だけでは max-sdk-base が取得できず、`max-pretarget.cmake` が見つからないエラーになる。
+必ず `submodules: recursive` を指定すること。
+
+### bbb_add_external() の MACOS_ONLY / WIN32_ONLY
+
+Windows 対応するには、macOS 専用 API を使う external をビルド対象から除外する必要がある。
+`bbb_add_external()` macro に以下のオプションを追加する:
+
+```cmake
+macro(bbb_add_external)
+    cmake_parse_arguments(ARG
+        "NO_HELP_COPY;MACOS_ONLY;WIN32_ONLY"
+        "RPATH"
+        "DEPS;INCLUDES;SOURCES"
+        ${ARGN}
+    )
+
+    if(ARG_MACOS_ONLY AND NOT APPLE)
+        return()
+    endif()
+    if(ARG_WIN32_ONLY AND NOT WIN32)
+        return()
+    endif()
+
+    # ... 既存の bbb_add_external() の処理 ...
+endmacro()
+```
+
+各 external の CMakeLists.txt で:
+
+```cmake
+# macOS 専用 (CommonCrypto, FSEvents, popen など)
+bbb_add_external(MACOS_ONLY)
+
+# Windows 専用
+bbb_add_external(WIN32_ONLY)
+
+# クロスプラットフォーム (オプションなし)
+bbb_add_external()
+```
+
+### macOS 専用 API の例
+
+以下の API/ヘッダは Windows に存在しないため `MACOS_ONLY` でガードすること:
+- `CommonCrypto/CommonDigest.h` → CryptoAPI または OpenSSL で代替
+- `CoreServices/CoreServices.h` → `ReadDirectoryChangesW` で代替
+- `popen()` / `pclose()` → `_popen()` / `_pclose()` (ただし挙動が異なる)
+- `<regex.h>` (POSIX) → C++11 `<regex>` で代替
+- `<unistd.h>` → Windows に存在しない
