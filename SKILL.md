@@ -106,7 +106,7 @@ jobs:
       - name: Upload externals
         uses: actions/upload-artifact@v4
         with:
-          name: externals-macos
+          name: ${{ github.event.repository.name }}-macos
           path: externals/
 
   build-windows:
@@ -122,7 +122,7 @@ jobs:
       - name: Upload externals
         uses: actions/upload-artifact@v4
         with:
-          name: externals-windows
+          name: ${{ github.event.repository.name }}-windows
           path: externals/
 
   package:
@@ -134,37 +134,39 @@ jobs:
       - name: Download macOS externals
         uses: actions/download-artifact@v4
         with:
-          name: externals-macos
-          path: dist/<package-name>/externals/
+          name: ${{ github.event.repository.name }}-macos
+          path: dist/${{ github.event.repository.name }}/externals/
 
       - name: Download Windows externals
         uses: actions/download-artifact@v4
         with:
-          name: externals-windows
-          path: dist/<package-name>/externals/
+          name: ${{ github.event.repository.name }}-windows
+          path: dist/${{ github.event.repository.name }}/externals/
 
       - name: Assemble package
         run: |
-          cp package-info.json dist/<package-name>/ 2>/dev/null || true
-          cp LICENSE dist/<package-name>/ 2>/dev/null || true
-          cp README.md dist/<package-name>/ 2>/dev/null || true
-          cp -r help dist/<package-name>/ 2>/dev/null || true
-          cp -r extra dist/<package-name>/ 2>/dev/null || true
-          cp -r patchers dist/<package-name>/ 2>/dev/null || true
+          mkdir -p "dist/${{ github.event.repository.name }}/"
+          cp package-info.json "dist/${{ github.event.repository.name }}/" 2>/dev/null || true
+          cp LICENSE "dist/${{ github.event.repository.name }}/" 2>/dev/null || true
+          cp README.md "dist/${{ github.event.repository.name }}/" 2>/dev/null || true
+          cp -r help "dist/${{ github.event.repository.name }}/" 2>/dev/null || true
+          cp -r extra "dist/${{ github.event.repository.name }}/" 2>/dev/null || true
+          cp -r patchers "dist/${{ github.event.repository.name }}/" 2>/dev/null || true
 
       - name: Create archive
         run: |
           cd dist
-          zip -r <package-name>.zip <package-name>/
+          zip -r "${{ github.event.repository.name }}.zip" "${{ github.event.repository.name }}/"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: <package-name>-latest
+          name: ${{ github.event.repository.name }}-latest
           path: dist/*.zip
 ```
 
-`<package-name>` はプロジェクト名に置換すること（例: `bbb.ltc`）。
+`${{ github.event.repository.name }}` でリポジトリ名が自動適用される。
+手動でのプレースホルダ置換は不要。
 
 1つの zip に macOS (.mxo) と Windows (.mxe64) の両方を含める。
 Max は実行環境に合わない拡張子を自動で無視するため、混在していても問題ない。
@@ -203,7 +205,7 @@ on:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: <package-name>-latest
+          name: ${{ github.event.repository.name }}-latest
           path: dist/*.zip
 
       - name: Upload to Release
