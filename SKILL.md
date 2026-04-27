@@ -145,7 +145,7 @@ jobs:
 
       - name: Assemble package
         run: |
-          cp package-info.json dist/<package-name>/
+          cp package-info.json dist/<package-name>/ 2>/dev/null || true
           cp LICENSE dist/<package-name>/ 2>/dev/null || true
           cp README.md dist/<package-name>/ 2>/dev/null || true
           cp -r help dist/<package-name>/ 2>/dev/null || true
@@ -189,9 +189,17 @@ on:
     types: [published]
 ```
 
-### package job に Release upload step を追加
+### package job に permissions と Release upload step を追加
 
 ```yaml
+  package:
+    permissions:
+      contents: write
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      # ... (assemble, create archive steps は段階2と同じ)
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
