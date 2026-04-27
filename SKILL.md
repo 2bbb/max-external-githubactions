@@ -152,12 +152,10 @@ jobs:
           cp -r extra dist/<package-name>/ 2>/dev/null || true
           cp -r patchers dist/<package-name>/ 2>/dev/null || true
 
-      - name: Create archives
+      - name: Create archive
         run: |
           cd dist
-          zip -r <package-name>-macos.zip <package-name>/ -x "<package-name>/externals/*.mxe64"
-          zip -r <package-name>-windows.zip <package-name>/ -x "<package-name>/externals/*.mxo"
-          zip -r <package-name>-universal.zip <package-name>/
+          zip -r <package-name>.zip <package-name>/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -168,8 +166,8 @@ jobs:
 
 `<package-name>` はプロジェクト名に置換すること（例: `bbb.ltc`）。
 
-macOS 用 zip から `.mxe64` を除外し、Windows 用 zip から `.mxo` を除外。
-universal zip は両方を含む。
+1つの zip に macOS (.mxo) と Windows (.mxe64) の両方を含める。
+Max は実行環境に合わない拡張子を自動で無視するため、混在していても問題ない。
 
 ---
 
