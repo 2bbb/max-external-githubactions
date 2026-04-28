@@ -388,8 +388,10 @@ Windows runner では `base64 -d` の代わりに PowerShell を使う:
 Host sub1.github.com
   HostName github.com
   IdentityFile ~/.ssh/deploy_key_sub1
+  HostKeyAlias github.com
 
 Host sub2.github.com
   HostName github.com
   IdentityFile ~/.ssh/deploy_key_sub2
+  HostKeyAlias github.com
 ```
