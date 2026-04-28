@@ -300,7 +300,14 @@ ssh-keygen -t ed25519 -C "ci-deploy-key" -f deploy_key -N ""
    - Value: base64 エンコードした秘密鍵
 
 ```bash
+# macOS
 base64 -i deploy_key | pbcopy
+
+# Linux
+base64 deploy_key
+
+# Windows (PowerShell)
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("deploy_key")) | Set-Clipboard
 ```
 
 base64 にする理由: 改行や特殊文字が GitHub Secret の入力で壊れるのを防ぐため。
@@ -323,10 +330,10 @@ jobs:
           mkdir -p ~/.ssh
           echo "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<EOF
           Host github.com
             IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking no
           EOF
 
       - name: Checkout submodules
@@ -348,15 +355,15 @@ Windows runner では `base64 -d` の代わりに PowerShell を使う:
           mkdir -Force ~/.ssh
           [System.IO.File]::WriteAllBytes("$HOME/.ssh/deploy_key", [System.Convert]::FromBase64String($env:DEPLOY_KEY))
           icacls "$HOME/.ssh/deploy_key" /inheritance:r /grant:r "$env:USERNAME:R"
+          ssh-keyscan github.com | Out-File -Encoding ascii -Append $HOME/.ssh/known_hosts
           @"
           Host github.com
             IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking no
-          "@ | Out-File -Encoding ascii ~/.ssh/config
+          "@ | Out-File -Encoding ascii -Append $HOME/.ssh/config
 ```
 
 ### 注意
 
 - 秘密鍵は **base64 エンコードして** Secret に登録すること（改行破損を防ぐ）
-- `StrictHostKeyChecking no` は CI 環境でのみ使用すること
+- `ssh-keyscan` でホスト鍵を `known_hosts` に追加し、`StrictHostKeyChecking no` は避けること
 - private submodule が複数ある場合は鍵を分けるか、同じ鍵を複数リポジトリに登録する
