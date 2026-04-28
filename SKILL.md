@@ -328,7 +328,7 @@ jobs:
           DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key  # macOS (BSD). Linux: base64 -d
+          printf '%s' "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key  # macOS (BSD). Linux: base64 -d
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<EOF
@@ -369,3 +369,27 @@ Windows runner では `base64 -d` の代わりに PowerShell を使う:
 - `.gitmodules` の submodule URL は SSH 形式 (`git@github.com:owner/repo.git`) にすること。HTTPS 形式の場合は認証エラーになる（または `git config --global url."git@github.com:".insteadOf "https://github.com/"` で HTTPS を SSH に自動置換する設定を行うことも可能）
 - private submodule が複数ある場合は、リポジトリごとに個別の鍵ペアを作成してください（GitHub では同じデプロイキーを複数のリポジトリに登録することはできません）
 - 複数の private submodule がある場合は、`.gitmodules` でホストエイリアス（例: `sub1.github.com:owner/repo.git`）を設定し、SSH config でエイリアスごとに個別の鍵を紐付ける必要があります。同じ `Host github.com` に複数の `IdentityFile` を追加しても、GitHub が最初の鍵で拒否すると次の鍵を試行できません
+
+### マルチ submodule 設定例
+
+`.gitmodules`:
+```ini
+[submodule "sub1"]
+  path = sub1
+  url = git@sub1.github.com:owner/repo1.git
+
+[submodule "sub2"]
+  path = sub2
+  url = git@sub2.github.com:owner/repo2.git
+```
+
+`~/.ssh/config` (CI 側):
+```text
+Host sub1.github.com
+  HostName github.com
+  IdentityFile ~/.ssh/deploy_key_sub1
+
+Host sub2.github.com
+  HostName github.com
+  IdentityFile ~/.ssh/deploy_key_sub2
+```
