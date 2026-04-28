@@ -328,7 +328,7 @@ jobs:
           DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key
+          echo "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key  # macOS (BSD). Linux: base64 -d
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<EOF
@@ -366,6 +366,6 @@ Windows runner では `base64 -d` の代わりに PowerShell を使う:
 
 - 秘密鍵は **base64 エンコードして** Secret に登録すること（改行破損を防ぐ）
 - `ssh-keyscan` でホスト鍵を `known_hosts` に追加し、`StrictHostKeyChecking no` は避けること
-- `.gitmodules` の submodule URL は SSH 形式 (`git@github.com:owner/repo.git`) にすること。HTTPS 形式の場合は認証エラーになる
+- `.gitmodules` の submodule URL は SSH 形式 (`git@github.com:owner/repo.git`) にすること。HTTPS 形式の場合は認証エラーになる（または `git config --global url."git@github.com:".insteadOf "https://github.com/"` で HTTPS を SSH に自動置換する設定を行うことも可能）
 - private submodule が複数ある場合は、リポジトリごとに個別の鍵ペアを作成してください（GitHub では同じデプロイキーを複数のリポジトリに登録することはできません）
 - 複数の private submodule がある場合は、`.gitmodules` でホストエイリアス（例: `sub1.github.com:owner/repo.git`）を設定し、SSH config でエイリアスごとに個別の鍵を紐付ける必要があります。同じ `Host github.com` に複数の `IdentityFile` を追加しても、GitHub が最初の鍵で拒否すると次の鍵を試行できません
