@@ -304,7 +304,7 @@ ssh-keygen -t ed25519 -C "ci-deploy-key" -f deploy_key -N ""
 base64 -i deploy_key | pbcopy
 
 # Linux
-base64 deploy_key
+base64 -w 0 deploy_key
 
 # Windows (PowerShell)
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("deploy_key")) | Set-Clipboard
@@ -366,4 +366,4 @@ Windows runner では `base64 -d` の代わりに PowerShell を使う:
 
 - 秘密鍵は **base64 エンコードして** Secret に登録すること（改行破損を防ぐ）
 - `ssh-keyscan` でホスト鍵を `known_hosts` に追加し、`StrictHostKeyChecking no` は避けること
-- private submodule が複数ある場合は鍵を分けるか、同じ鍵を複数リポジトリに登録する
+- private submodule が複数ある場合は、リポジトリごとに個別の鍵ペアを作成してください（GitHub では同じデプロイキーを複数のリポジトリに登録することはできません）
