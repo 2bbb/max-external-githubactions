@@ -321,7 +321,7 @@ jobs:
           DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" | base64 -d > ~/.ssh/deploy_key
+          echo "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           cat >> ~/.ssh/config <<EOF
           Host github.com
@@ -346,8 +346,8 @@ Windows runner では `base64 -d` の代わりに PowerShell を使う:
         shell: pwsh
         run: |
           mkdir -Force ~/.ssh
-          [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("$env:DEPLOY_KEY")) | Out-File -Encoding ascii ~/.ssh/deploy_key
-          icacls ~/.ssh/deploy_key /inheritance:r /grant:r "$env:USERNAME:R"
+          [System.IO.File]::WriteAllBytes("$HOME/.ssh/deploy_key", [System.Convert]::FromBase64String($env:DEPLOY_KEY))
+          icacls "$HOME/.ssh/deploy_key" /inheritance:r /grant:r "$env:USERNAME:R"
           @"
           Host github.com
             IdentityFile ~/.ssh/deploy_key
