@@ -240,7 +240,7 @@ on:
 
 `submodules: recursive` で CI 上にチェックアウトするため、
 依存する submodule リポジトリはすべて public に設定すること。
-private のまま使う場合は deploy key の設定が必要。
+private のまま使う場合は deploy key の設定が必要（下記「Private submodule の場合」を参照）。
 
 ### submodules: recursive が必須
 
@@ -273,3 +273,90 @@ bbb_add_external()
 - `popen()` / `pclose()` → `_popen()` / `_pclose()` (ただし挙動が異なる)
 - `<regex.h>` (POSIX) → C++11 `<regex>` で代替
 - `<unistd.h>` → Windows に存在しない
+
+---
+
+## Private submodule の場合
+
+private リポジトリを submodule として参照する場合、`actions/checkout` の
+`submodules: recursive` だけでは認証エラーになる。SSH deploy key を使う。
+
+### セットアップ手順
+
+1. **SSH 鍵ペアを生成** (ローカル):
+
+```bash
+ssh-keygen -t ed25519 -C "ci-deploy-key" -f deploy_key -N ""
+```
+
+2. **公開鍵を private submodule リポジトリに登録**:
+   - 対象リポジトリ → Settings → Deploy keys → Add deploy key
+   - **Read-only** でよい（CI は clone だけする）
+   - Title: `ci-deploy-key` 等
+
+3. **秘密鍵をメインリポジトリの Secret に登録**:
+   - メインリポジトリ → Settings → Secrets → New repository secret
+   - Name: `<SUBMODULE>_DEPLOY_KEY` (例: `NOZZLE_DEPLOY_KEY`)
+   - Value: base64 エンコードした秘密鍵
+
+```bash
+base64 -i deploy_key | pbcopy
+```
+
+base64 にする理由: 改行や特殊文字が GitHub Secret の入力で壊れるのを防ぐため。
+
+### ワークフロー例
+
+```yaml
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false  # ← まずは自分だけ checkout
+
+      - name: Setup SSH deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" | base64 -d > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >> ~/.ssh/config <<EOF
+          Host github.com
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+          EOF
+
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+
+      # ... 通常のビルド手順 ...
+```
+
+### Windows の場合
+
+Windows runner では `base64 -d` の代わりに PowerShell を使う:
+
+```yaml
+      - name: Setup SSH deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
+        shell: pwsh
+        run: |
+          mkdir -Force ~/.ssh
+          [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("$env:DEPLOY_KEY")) | Out-File -Encoding ascii ~/.ssh/deploy_key
+          icacls ~/.ssh/deploy_key /inheritance:r /grant:r "$env:USERNAME:R"
+          @"
+          Host github.com
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+          "@ | Out-File -Encoding ascii ~/.ssh/config
+```
+
+### 注意
+
+- 秘密鍵は **base64 エンコードして** Secret に登録すること（改行破損を防ぐ）
+- `StrictHostKeyChecking no` は CI 環境でのみ使用すること
+- private submodule が複数ある場合は鍵を分けるか、同じ鍵を複数リポジトリに登録する
