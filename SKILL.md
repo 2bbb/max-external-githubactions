@@ -328,7 +328,7 @@ jobs:
           DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key
+          echo "$DEPLOY_KEY" | base64 --decode > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<EOF
@@ -366,4 +366,5 @@ Windows runner では `base64 -d` の代わりに PowerShell を使う:
 
 - 秘密鍵は **base64 エンコードして** Secret に登録すること（改行破損を防ぐ）
 - `ssh-keyscan` でホスト鍵を `known_hosts` に追加し、`StrictHostKeyChecking no` は避けること
+- `.gitmodules` の submodule URL は SSH 形式 (`git@github.com:owner/repo.git`) にすること。HTTPS 形式の場合は認証エラーになる
 - private submodule が複数ある場合は、リポジトリごとに個別の鍵ペアを作成してください（GitHub では同じデプロイキーを複数のリポジトリに登録することはできません）
