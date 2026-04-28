@@ -240,7 +240,7 @@ on:
 
 `submodules: recursive` で CI 上にチェックアウトするため、
 依存する submodule リポジトリはすべて public に設定すること。
-private のまま使う場合は deploy key の設定が必要。
+private のまま使う場合は deploy key の設定が必要（下記「Private submodule の場合」を参照）。
 
 ### submodules: recursive が必須
 
@@ -273,3 +273,99 @@ bbb_add_external()
 - `popen()` / `pclose()` → `_popen()` / `_pclose()` (ただし挙動が異なる)
 - `<regex.h>` (POSIX) → C++11 `<regex>` で代替
 - `<unistd.h>` → Windows に存在しない
+
+---
+
+## Private submodule の場合
+
+private リポジトリを submodule として参照する場合、`actions/checkout` の
+`submodules: recursive` だけでは認証エラーになる。SSH deploy key を使う。
+
+### セットアップ手順
+
+1. **SSH 鍵ペアを生成** (ローカル):
+
+```bash
+ssh-keygen -t ed25519 -C "ci-deploy-key" -f deploy_key -N ""
+```
+
+2. **公開鍵を private submodule リポジトリに登録**:
+   - 対象リポジトリ → Settings → Deploy keys → Add deploy key
+   - **Read-only** でよい（CI は clone だけする）
+   - Title: `ci-deploy-key` 等
+
+3. **秘密鍵をメインリポジトリの Secret に登録**:
+   - メインリポジトリ → Settings → Secrets → New repository secret
+   - Name: `<SUBMODULE>_DEPLOY_KEY` (例: `NOZZLE_DEPLOY_KEY`)
+   - Value: base64 エンコードした秘密鍵
+
+```bash
+# macOS
+base64 -i deploy_key | pbcopy
+
+# Linux
+base64 -w 0 deploy_key
+
+# Windows (PowerShell)
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("deploy_key")) | Set-Clipboard
+```
+
+base64 にする理由: 改行や特殊文字が GitHub Secret の入力で壊れるのを防ぐため。
+
+### ワークフロー例
+
+```yaml
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false  # ← まずは自分だけ checkout
+
+      - name: Setup SSH deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" | base64 -D > ~/.ssh/deploy_key  # macOS (BSD). Linux: base64 -d
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host github.com
+            IdentityFile ~/.ssh/deploy_key
+          EOF
+
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+
+      # ... 通常のビルド手順 ...
+```
+
+### Windows の場合
+
+Windows runner では `base64 -d` の代わりに PowerShell を使う:
+
+```yaml
+      - name: Setup SSH deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.NOZZLE_DEPLOY_KEY }}
+        shell: pwsh
+        run: |
+          mkdir -Force ~/.ssh
+          [System.IO.File]::WriteAllBytes("$HOME/.ssh/deploy_key", [System.Convert]::FromBase64String($env:DEPLOY_KEY))
+          icacls "$HOME/.ssh/deploy_key" /inheritance:r /grant:r "$env:USERNAME:R"
+          ssh-keyscan github.com | Out-File -Encoding ascii -Append $HOME/.ssh/known_hosts
+          @"
+          Host github.com
+            IdentityFile ~/.ssh/deploy_key
+          "@ | Out-File -Encoding ascii -Append $HOME/.ssh/config
+```
+
+### 注意
+
+- 秘密鍵は **base64 エンコードして** Secret に登録すること（改行破損を防ぐ）
+- `ssh-keyscan` でホスト鍵を `known_hosts` に追加し、`StrictHostKeyChecking no` は避けること
+- `.gitmodules` の submodule URL は SSH 形式 (`git@github.com:owner/repo.git`) にすること。HTTPS 形式の場合は認証エラーになる（または `git config --global url."git@github.com:".insteadOf "https://github.com/"` で HTTPS を SSH に自動置換する設定を行うことも可能）
+- private submodule が複数ある場合は、リポジトリごとに個別の鍵ペアを作成してください（GitHub では同じデプロイキーを複数のリポジトリに登録することはできません）
+- 複数の private submodule がある場合は、`.gitmodules` でホストエイリアス（例: `sub1.github.com:owner/repo.git`）を設定し、SSH config でエイリアスごとに個別の鍵を紐付ける必要があります。同じ `Host github.com` に複数の `IdentityFile` を追加しても、GitHub が最初の鍵で拒否すると次の鍵を試行できません
