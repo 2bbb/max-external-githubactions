@@ -240,13 +240,27 @@ on:
 原因はほぼ確実に **配布物が Developer ID 署名 + notarization されていない** こと。
 `xattr -dr com.apple.quarantine` はローカル開発用の逃げであって、Release の解決策ではない。
 
+判断境界:
+
+- **Apple の検証警告を public download で消す必要がある場合だけ**、Developer ID 署名 + notarization を導入する。
+- ユーザーが notarization は不要、または workflow 変更は不要と言った場合、CI/release workflow に署名・notarization・secret 必須化を追加しない。
+- secrets が無いことだけを理由に main の package/release 更新を失敗させる変更を勝手に入れない。これは配布方針の変更であり、明示要求が必要。
+- `xattr -dr com.apple.quarantine` はユーザーのローカル回避策であって、agent から提案・実行するのは明示要求がある時だけ。
+
+必要なもの:
+
+- **public download で Apple の検証警告を消す**: Developer ID Application 証明書、Apple notarization 用認証情報、macOS runner で作った notarize 済み zip が必要。
+- **notarization しない配布を続ける**: 有効な bundle identifier、ad-hoc codesign、実行権限、macOS bundle を壊さない zip が必要。ただし Apple の検証警告は仕様として残る。
+- **ユーザーの手元で開くだけ**: macOS の「開く」/「このまま開く」等のユーザー承認が必要。repo/CI 側の修正ではない。
+
 結論:
 
-- Release に載せる macOS `.mxo` は **Developer ID Application** 証明書で署名する。
-- Release に載せる macOS archive は `xcrun notarytool submit --wait` で notarize する。
+- Release に載せる macOS `.mxo` を Apple 検証済みにしたい場合は **Developer ID Application** 証明書で署名する。
+- Release に載せる macOS archive を Apple 検証済みにしたい場合は `xcrun notarytool submit --wait` で notarize する。
 - 配布する zip は **notarytool に投げたそのもの** にする。notarize 後に Ubuntu などで zip を作り直すな。
 - macOS bundle/リソースを含む archive は macOS runner の `ditto -c -k --keepParent` で作る。
 - Bundle identifier / signing identifier は `jp.2bit.*` を使う。例: `jp.2bit.bbb.artnet.controller`。
+- ただし、このセクションは「Gatekeeper-safe release を要求された時だけ」の実装手順であり、通常の build/package workflow に自動適用しない。
 
 ### GitHub Secrets
 
@@ -431,7 +445,7 @@ notarize 後に別 job で zip を作り直すと、ユーザー側では未 not
 
 ### ローカル開発だけの回避策
 
-開発中に自分の Mac だけで検証したい場合のみ quarantine を消してよい。
+ユーザーが明示的に求めた場合、かつ開発中に自分の Mac だけで検証したい場合のみ quarantine を消してよい。
 Release 手順の代わりにしてはいけない。
 
 ```bash
