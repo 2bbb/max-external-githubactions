@@ -1,3 +1,8 @@
+---
+name: max-external-githubactions
+description: Create and maintain GitHub Actions workflows for Max/MSP min-api external projects, including macOS universal builds, Windows mxe64 builds, release packaging, Developer ID signing, Apple notarization, Gatekeeper-safe downloads, and private submodule CI setup.
+---
+
 # max-external-githubactions
 
 Max/MSP external (min-api) プロジェクト用 GitHub Actions ワークフロー。
@@ -158,6 +163,11 @@ jobs:
           cd dist
           zip -r "${{ github.event.repository.name }}.zip" "${{ github.event.repository.name }}/"
 
+      # 注意: Gatekeeper 対応が必要な macOS 配布物は、下の
+      # 「macOS Gatekeeper 対応」セクションの通り macOS runner 上で
+      # codesign + notarytool + ditto によって作った archive を配布すること。
+      # Ubuntu の zip は通常 artifact 用としては十分だが、notarize 済み archive の代替にはならない。
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -220,6 +230,213 @@ on:
 1. タグを打つ: `git tag v1.0.0 && git push --tags`
 2. GitHub 上で Release を作成 (タグを指定)
 3. CI が自動ビルド → zip を Release assets に添付
+
+---
+
+## macOS Gatekeeper 対応 (Developer ID 署名 + notarization)
+
+ユーザーがダウンロードした `.mxo` で
+「Apple はマルウェアが含まれていないことを検証できませんでした」系の警告が出る場合、
+原因はほぼ確実に **配布物が Developer ID 署名 + notarization されていない** こと。
+`xattr -dr com.apple.quarantine` はローカル開発用の逃げであって、Release の解決策ではない。
+
+結論:
+
+- Release に載せる macOS `.mxo` は **Developer ID Application** 証明書で署名する。
+- Release に載せる macOS archive は `xcrun notarytool submit --wait` で notarize する。
+- 配布する zip は **notarytool に投げたそのもの** にする。notarize 後に Ubuntu などで zip を作り直すな。
+- macOS bundle/リソースを含む archive は macOS runner の `ditto -c -k --keepParent` で作る。
+- Bundle identifier / signing identifier は `jp.2bit.*` を使う。例: `jp.2bit.bbb.artnet.controller`。
+
+### GitHub Secrets
+
+Release notarization を CI で行う repository には以下を登録する。
+
+| Secret | 内容 |
+|---|---|
+| `MACOS_CERTIFICATE_P12` | Developer ID Application 証明書を書き出した `.p12` の base64 |
+| `MACOS_CERTIFICATE_PASSWORD` | `.p12` のパスワード |
+| `APPLE_ID` | Apple Developer アカウントの Apple ID |
+| `APPLE_TEAM_ID` | Team ID |
+| `APPLE_APP_SPECIFIC_PASSWORD` | notarization 用 App-specific password |
+| `DEVELOPER_ID_APPLICATION` | `Developer ID Application: ... (TEAMID)` の署名名 |
+
+`.p12` はローカルで base64 化して登録する。
+
+```bash
+base64 -i developer-id-application.p12 | pbcopy
+```
+
+### 署名 identifier の規則
+
+`jp.2bit.*` 以外を使わない。プロジェクト名・external 名から以下のように作る。
+
+```bash
+BUNDLE_ID_PREFIX="jp.2bit"
+EXTERNAL_NAME="bbb.artnet.controller"
+SIGNING_IDENTIFIER="${BUNDLE_ID_PREFIX}.${EXTERNAL_NAME}"
+# => jp.2bit.bbb.artnet.controller
+```
+
+external 名に identifier として不正な文字が混ざる場合だけ、英数字・`.`・`-` 以外を `-` に潰す。
+
+```bash
+sanitize_identifier_component() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9.-]+/-/g; s/^-+//; s/-+$//'
+}
+```
+
+CMake 側で bundle identifier を指定できる場合も `jp.2bit.*` に揃える。テンプレート由来の
+`com.acme...` や未置換 `${PRODUCT_NAME...}` を Release に混ぜるな。
+
+```cmake
+set_target_properties(<target> PROPERTIES
+  XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "jp.2bit.<external-name>"
+  MACOSX_BUNDLE_GUI_IDENTIFIER "jp.2bit.<external-name>"
+)
+```
+
+### macOS build job への署名 step
+
+Release/tag のときだけ秘密鍵を import し、`.mxo` bundle を署名する。
+PR、特に fork 由来 PR で秘密情報を使う設計にするな。
+
+```yaml
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure and Build
+        run: cmake -B build && cmake --build build --config Release
+
+      - name: Import Developer ID certificate
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          printf '%s' "$CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Sign Max externals
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          BUNDLE_ID_PREFIX: jp.2bit
+        run: |
+          set -euo pipefail
+          sanitize_identifier_component() {
+            printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9.-]+/-/g; s/^-+//; s/-+$//'
+          }
+          find externals -name "*.mxo" -type d -print0 | while IFS= read -r -d '' mxo; do
+            name="$(basename "$mxo" .mxo)"
+            component="$(sanitize_identifier_component "$name")"
+            identifier="${BUNDLE_ID_PREFIX}.${component}"
+            codesign --force --deep --options runtime --timestamp \
+              --identifier "$identifier" \
+              --sign "$DEVELOPER_ID_APPLICATION" \
+              "$mxo"
+            codesign --verify --deep --strict --verbose=2 "$mxo"
+          done
+
+      - name: Upload externals
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-macos
+          path: externals/
+```
+
+### notarize 済み Release archive を作る job
+
+Gatekeeper 対応の Release asset を作る場合は、最終 archive 作成も notarization も macOS runner で行う。
+Windows artifact を同梱したいなら macOS runner で Windows artifact も download してから `ditto` で固める。
+
+```yaml
+  package-release:
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    needs: [build-macos, build-windows]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download macOS externals
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-macos
+          path: dist/${{ github.event.repository.name }}/externals/
+
+      - name: Download Windows externals
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-windows
+          path: dist/${{ github.event.repository.name }}/externals/
+
+      - name: Assemble package
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="dist/${{ github.event.repository.name }}"
+          mkdir -p "$pkg"
+          cp package-info.json "$pkg/" 2>/dev/null || true
+          cp LICENSE "$pkg/" 2>/dev/null || true
+          cp README.md "$pkg/" 2>/dev/null || true
+          cp -R help "$pkg/" 2>/dev/null || true
+          cp -R extra "$pkg/" 2>/dev/null || true
+          cp -R patchers "$pkg/" 2>/dev/null || true
+
+      - name: Create macOS-preserving archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          ditto -c -k --keepParent "${{ github.event.repository.name }}" "${{ github.event.repository.name }}.zip"
+
+      - name: Notarize archive
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit "dist/${{ github.event.repository.name }}.zip" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ github.event.repository.name }}.zip
+```
+
+`stapler` は `.app` / `.pkg` / `.dmg` 向け。zip 配布では、notarize に通した zip をそのまま配る。
+notarize 後に別 job で zip を作り直すと、ユーザー側では未 notarize 扱いになり得る。
+
+### ローカル開発だけの回避策
+
+開発中に自分の Mac だけで検証したい場合のみ quarantine を消してよい。
+Release 手順の代わりにしてはいけない。
+
+```bash
+xattr -dr com.apple.quarantine "/Users/$USER/Documents/Max 9/Packages/<package-name>"
+```
 
 ---
 
