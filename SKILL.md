@@ -163,10 +163,11 @@ jobs:
           cd dist
           zip -r "${{ github.event.repository.name }}.zip" "${{ github.event.repository.name }}/"
 
-      # 注意: Gatekeeper 対応が必要な macOS 配布物は、下の
-      # 「macOS Gatekeeper 対応」セクションの通り macOS runner 上で
-      # codesign + notarytool + ditto によって作った archive を配布すること。
-      # Ubuntu の zip は通常 artifact 用としては十分だが、notarize 済み archive の代替にはならない。
+      # 注意: Max external (.mxo) bundle をユーザーに配る zip は、可能なら macOS runner 上で
+      # ditto -c -k --keepParent によって作ること。Ubuntu の zip は通常 artifact 用としては十分だが、
+      # macOS bundle metadata/permission の扱いが原因で Gatekeeper/Max ロード時の挙動が変わり得る。
+      # Gatekeeper 対応が必要な配布物は、下の「macOS Gatekeeper 対応」セクションの通り
+      # valid bundle identifier + codesign + notarytool + ditto を使うこと。
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -237,34 +238,57 @@ on:
 
 ユーザーがダウンロードした `.mxo` で
 「Apple はマルウェアが含まれていないことを検証できませんでした」系の警告が出る場合、
-原因はほぼ確実に **配布物が Developer ID 署名 + notarization されていない** こと。
-`xattr -dr com.apple.quarantine` はローカル開発用の逃げであって、Release の解決策ではない。
+原因は **Developer ID 署名 + notarization 不足** だけに限らない。
+実運用では以下も警告・ロード失敗・不安定挙動の原因になる。
+
+- `CFBundleIdentifier` / signing identifier が空、`.`、`com.acme...`、未置換 `${PRODUCT_NAME...}` などの壊れた値
+- Ubuntu/Linux の `zip -r` で macOS bundle metadata や permission の扱いが雑になった archive
+- `.mxo/Contents/MacOS/*` に実行 permission が無い、または bundle 構造が崩れている
+- quarantine/provenance の付き方や展開経路の違い
+
+`xattr -dr com.apple.quarantine` はローカル開発用の逃げであって、Release の根本解決ではない。
+ただし、secret を使わない内部向け CI では unsigned 配布を許容する判断もあり得る。その場合は Gatekeeper-safe と呼ばない。
 
 判断境界:
 
 - **Apple の検証警告を public download で消す必要がある場合だけ**、Developer ID 署名 + notarization を導入する。
 - ユーザーが notarization は不要、または workflow 変更は不要と言った場合、CI/release workflow に署名・notarization・secret 必須化を追加しない。
 - secrets が無いことだけを理由に main の package/release 更新を失敗させる変更を勝手に入れない。これは配布方針の変更であり、明示要求が必要。
+- secret-free CI では missing secrets は `::notice::` に留め、署名・notarization step だけを skip する。
 - `xattr -dr com.apple.quarantine` はユーザーのローカル回避策であって、agent から提案・実行するのは明示要求がある時だけ。
 
 必要なもの:
 
 - **public download で Apple の検証警告を消す**: Developer ID Application 証明書、Apple notarization 用認証情報、macOS runner で作った notarize 済み zip が必要。
-- **notarization しない配布を続ける**: 有効な bundle identifier、ad-hoc codesign、実行権限、macOS bundle を壊さない zip が必要。ただし Apple の検証警告は仕様として残る。
+- **notarization しない配布を続ける**: 有効な `jp.2bit.*` bundle identifier、ad-hoc codesign、実行権限、macOS `ditto` zip が最低ライン。ただし Apple の検証警告は仕様として残る。
 - **ユーザーの手元で開くだけ**: macOS の「開く」/「このまま開く」等のユーザー承認が必要。repo/CI 側の修正ではない。
 
 結論:
 
-- Release に載せる macOS `.mxo` を Apple 検証済みにしたい場合は **Developer ID Application** 証明書で署名する。
-- Release に載せる macOS archive を Apple 検証済みにしたい場合は `xcrun notarytool submit --wait` で notarize する。
-- 配布する zip は **notarytool に投げたそのもの** にする。notarize 後に Ubuntu などで zip を作り直すな。
+- 最低限、Release に載せる macOS `.mxo` は valid な `jp.2bit.*` bundle identifier を持たせる。
 - macOS bundle/リソースを含む archive は macOS runner の `ditto -c -k --keepParent` で作る。
+- `.mxo/Contents/MacOS/*` は package 前に `chmod 755` で正規化する。
+- Apple 検証済みにしたい場合だけ `.mxo` を **Developer ID Application** 証明書で署名し、Release archive を `xcrun notarytool submit --wait` で notarize する。
+- 配布する zip は **notarytool に投げたそのもの** にする。notarize 後に Ubuntu などで zip を作り直すな。
 - Bundle identifier / signing identifier は `jp.2bit.*` を使う。例: `jp.2bit.bbb.artnet.controller`。
 - ただし、このセクションは「Gatekeeper-safe release を要求された時だけ」の実装手順であり、通常の build/package workflow に自動適用しない。
 
+### Secret-free CI の現実解
+
+GitHub Secrets を入れない方針の場合、CI は失敗させずに unsigned package を作ってよい。
+ただし以下を守る。
+
+- missing secrets を `::error::` にして main/release を落とさない。`::notice::` に留める。
+- signing / notarization step は credentials が揃っている時だけ実行する。
+- unsigned package を Gatekeeper-safe と書かない。
+- それでも `jp.2bit.*` bundle identifier、macOS `ditto` zip、`chmod 755` は維持する。
+
+この設計は「警告が絶対に出ない」保証ではない。目的は、壊れた bundle / 雑な zip による余計な警告を減らしつつ、secret 無しでも CI artifact/latest release を継続生成すること。
+
 ### GitHub Secrets
 
-Release notarization を CI で行う repository には以下を登録する。
+Developer ID signing / notarization を CI で行う repository には以下を登録する。
+secret-free CI の場合は登録不要だが、その場合の zip は unsigned / non-notarized として扱う。
 
 | Secret | 内容 |
 |---|---|
@@ -312,8 +336,9 @@ set_target_properties(<target> PROPERTIES
 
 ### macOS build job への署名 step
 
-Release/tag のときだけ秘密鍵を import し、`.mxo` bundle を署名する。
+Release/tag/main で Developer ID の secrets が揃っている時だけ秘密鍵を import し、`.mxo` bundle を署名する。
 PR、特に fork 由来 PR で秘密情報を使う設計にするな。
+secret-free CI を許容する場合は、missing secrets で job を失敗させず署名 step だけ skip する。
 
 ```yaml
   build-macos:
@@ -326,8 +351,31 @@ PR、特に fork 由来 PR で秘密情報を使う設計にするな。
       - name: Configure and Build
         run: cmake -B build && cmake --build build --config Release
 
+      - name: Check macOS signing secrets
+        id: macos_signing
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in MACOS_CERTIFICATE_P12 MACOS_CERTIFICATE_PASSWORD DEVELOPER_ID_APPLICATION; do
+            if [ -z "${!name:-}" ]; then
+              echo "::notice::$name is not set; macOS externals will be uploaded unsigned"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Import Developer ID certificate
-        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+        if: steps.macos_signing.outputs.available == 'true'
         shell: bash
         env:
           CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
@@ -345,7 +393,7 @@ PR、特に fork 由来 PR で秘密情報を使う設計にするな。
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
       - name: Sign Max externals
-        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+        if: steps.macos_signing.outputs.available == 'true'
         shell: bash
         env:
           DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
@@ -412,6 +460,7 @@ Windows artifact を同梱したいなら macOS runner で Windows artifact も 
           cp -R help "$pkg/" 2>/dev/null || true
           cp -R extra "$pkg/" 2>/dev/null || true
           cp -R patchers "$pkg/" 2>/dev/null || true
+          find "$pkg/externals" -path '*/Contents/MacOS/*' -type f -exec chmod 755 {} + 2>/dev/null || true
 
       - name: Create macOS-preserving archive
         shell: bash
@@ -420,7 +469,31 @@ Windows artifact を同梱したいなら macOS runner で Windows artifact も 
           cd dist
           ditto -c -k --keepParent "${{ github.event.repository.name }}" "${{ github.event.repository.name }}.zip"
 
+      - name: Check notarization secrets
+        id: notarization
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::notice::$name is not set; package will be uploaded without notarization"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Notarize archive
+        if: steps.notarization.outputs.available == 'true'
         shell: bash
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
