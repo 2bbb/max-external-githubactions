@@ -236,6 +236,11 @@ on:
 
 ## macOS Gatekeeper 対応 (Developer ID 署名 + notarization)
 
+Public ZIP を必ず署名する運用では、inline snippet を複製せず
+[`templates/macos-direct-distribution.sh`](templates/macos-direct-distribution.sh) を vendor して使う。
+secret、fail-closed 条件、検証ゲートは
+[`docs/macos-direct-distribution.md`](docs/macos-direct-distribution.md) を参照すること。
+
 ユーザーがダウンロードした `.mxo` で
 「Apple はマルウェアが含まれていないことを検証できませんでした」系の警告が出る場合、
 原因は **Developer ID 署名 + notarization 不足** だけに限らない。
