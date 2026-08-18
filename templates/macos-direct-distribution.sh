@@ -65,27 +65,49 @@ assert_signature() {
     || die "unexpected signing authority: $bundle"
   grep -Fq "TeamIdentifier=${APPLE_TEAM_ID}" <<<"$details" \
     || die "unexpected TeamIdentifier: $bundle"
+  grep -q '^Timestamp=' <<<"$details" \
+    || die "secure timestamp is missing: $bundle"
   actual_identifier="$(sed -n 's/^Identifier=//p' <<<"$details")"
   [[ "$actual_identifier" == "$identifier" ]] \
     || die "signing identifier mismatch for $bundle: expected $identifier, got $actual_identifier"
 }
 
+assert_macho_signature() {
+  local binary="$1" identity details
+  identity="$(expected_identity)"
+  codesign --verify --strict --verbose=2 "$binary"
+  details="$(codesign -dv --verbose=4 "$binary" 2>&1)"
+  grep -Fq "Authority=${identity}" <<<"$details" \
+    || die "unexpected signing authority: $binary"
+  grep -Fq "TeamIdentifier=${APPLE_TEAM_ID}" <<<"$details" \
+    || die "unexpected TeamIdentifier: $binary"
+  grep -q '^Timestamp=' <<<"$details" \
+    || die "secure timestamp is missing: $binary"
+}
+
 verify_tree() {
-  local root="$1" count bundle
+  local root="$1" count bundle candidate macho_count=0
   count="$(mxo_count "$root")"
   [[ "$count" -gt 0 ]] || die "no .mxo bundles found under: $root"
+  while IFS= read -r -d '' candidate; do
+    if file -b "$candidate" | grep -q 'Mach-O'; then
+      assert_macho_signature "$candidate"
+      ((macho_count += 1))
+    fi
+  done < <(find "$root" -type f -print0)
   while IFS= read -r -d '' bundle; do
     assert_bundle_metadata "$bundle"
     assert_signature "$bundle"
   done < <(find "$root" -type d -name '*.mxo' -prune -print0)
-  printf 'verified %s signed Max external bundle(s)\n' "$count"
+  printf 'verified %s signed Max external bundle(s) and %s Mach-O file(s)\n' \
+    "$count" "$macho_count"
 }
 
 sign_tree() {
   require_macos
   require_env MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_TEAM_ID RUNNER_TEMP
 
-  local root="$1" identity cert_path keychain_path keychain_password count bundle candidate
+  local root="$1" identity cert_path keychain_path keychain_password count bundle candidate macho_count=0
   root="$(cd "$root" && pwd)"
   count="$(mxo_count "$root")"
   [[ "$count" -gt 0 ]] || die "no .mxo bundles found under: $root"
@@ -115,22 +137,26 @@ sign_tree() {
     | grep -Fq "\"${identity}\"" \
     || die "expected Developer ID identity is absent: ${identity}"
 
+  while IFS= read -r -d '' candidate; do
+    if file -b "$candidate" | grep -q 'Mach-O'; then
+      chmod 755 "$candidate"
+      codesign --force --options runtime --timestamp \
+        --keychain "$keychain_path" --sign "$identity" "$candidate"
+      assert_macho_signature "$candidate"
+      ((macho_count += 1))
+    fi
+  done < <(find "$root" -type f -print0)
+
   while IFS= read -r -d '' bundle; do
     assert_bundle_metadata "$bundle"
-    while IFS= read -r -d '' candidate; do
-      if file -b "$candidate" | grep -q 'Mach-O'; then
-        chmod 755 "$candidate"
-        codesign --force --options runtime --timestamp \
-          --keychain "$keychain_path" --sign "$identity" "$candidate"
-      fi
-    done < <(find "$bundle/Contents" -type f -print0)
     codesign --force --options runtime --timestamp \
       --identifier "$(bundle_identifier "$bundle")" \
       --keychain "$keychain_path" --sign "$identity" "$bundle"
     assert_signature "$bundle"
   done < <(find "$root" -type d -name '*.mxo' -prune -print0)
 
-  printf 'signed %s Max external bundle(s) as %s\n' "$count" "$identity"
+  printf 'signed %s Mach-O file(s) and %s Max external bundle(s) as %s\n' \
+    "$macho_count" "$count" "$identity"
 }
 
 archive_tree() {
